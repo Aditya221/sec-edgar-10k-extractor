@@ -87,10 +87,26 @@ def fetch_mda_content(cik: str, cleaned_adsh: str, identity_headers: dict) -> st
             return ""
             
         directory_items = response.json().get("directory", {}).get("item", [])
-        primary_document_name = next(
-            (item.get("name") for item in directory_items if item.get("type") == "10-K" and item.get("name", "").endswith((".htm", ".html"))), 
-            None
-        )
+        # Filter and find the primary 10-K document (ignoring exhibits and rendering files)
+        candidates = []
+        for item in directory_items:
+            name = item.get("name", "")
+            if name.endswith((".htm", ".html")):
+                name_lower = name.lower()
+                if "index" in name_lower or "header" in name_lower:
+                    continue
+                if "exhibit" in name_lower or re.search(r"ex[-_\d]", name_lower):
+                    continue
+                if re.match(r"^r\d+\.html?$", name_lower):
+                    continue
+                try:
+                    size = int(item.get("size", 0) or 0)
+                except ValueError:
+                    size = 0
+                candidates.append((name, size))
+        
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        primary_document_name = candidates[0][0] if candidates else None
                 
         if not primary_document_name:
             return ""
@@ -145,7 +161,15 @@ def extract_10k_mda(ticker: str, user_agent_email: str) -> Optional[Dict[str, An
         sorted_hits = sorted(hits, key=lambda x: x.get("_source", {}).get("file_date", ""), reverse=True)
         top_hit = sorted_hits[0]["_source"]
         
-        company_name = top_hit.get("entity_name", ticker)
+        # Extract clean company name from search display names
+        display_names = top_hit.get("display_names", [])
+        company_name = ticker
+        if display_names:
+            parts = re.split(r'\s{2,}\(', display_names[0])
+            if parts:
+                company_name = parts[0].strip()
+        else:
+            company_name = top_hit.get("entity_name", ticker)
         adsh = str(top_hit.get("adsh", ""))
         cleaned_adsh = adsh.replace("-", "")
         
